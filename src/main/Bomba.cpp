@@ -1,12 +1,75 @@
 #include "Bomba.h"
 
-Bomba bombaInterna();
-
 Bomba::Bomba()
+{
+    //TODO TRAER CONFIGURACION DE MAIN
+}
+void Bomba::Init()
 {
 
 }
-void Bomba::Init()
+
+void Bomba::eepromSetUp()
+{  // ---------------- EEEPROM -----------------------------//
+  recuperarVariables(); //PARAMETRO DE CALIBRACION EEEPROM
+  ml_rev = ml_revs[diametro];
+  pasoProporcion = ml_rev;
+  pasoFlujo = ml_rev;
+  pasoVolumen = ml_rev;
+  flujoMax = RPMAX * ml_rev;
+  flujoMin = RPMMIN * ml_rev;
+  flujoPSMax = flujoMax/60.00;
+}
+
+void Bomba::recuperarVariables()
+{
+  bool primeraVez;
+  EEPROM.get(dirInicializado, primeraVez);
+  if(primeraVez == 0)
+  {
+    Serial.println("VARIABLES GUARDADAS");
+    for(int o = diametroMin; o <= diametroMax; o++)
+    {
+      EEPROM.get(32*o, ml_revs[o]);
+    }
+    EEPROM.get(dirDiametro, diametro);
+    EEPROM.get(dirDireccion, direccion);  
+  }
+  else  // primera vez;
+  {
+    Serial.println("SIN VARIABLES GUARDADAS");
+    for (int i = 0 ; i < EEPROM.length() ; i++) 
+    {
+    EEPROM.write(i, 0);
+    }
+    EEPROM.put(dirInicializado, 0);
+    EEPROM.put(dirDiametro, diametro);
+    EEPROM.put(dirDireccion, direccion);
+    for(int u = diametroMin; u <= diametroMax; u++)
+    {
+      EEPROM.put(32*u, 1.0);
+    }
+  } 
+}
+
+inline void Bomba::stepperSetUo()
+{
+// ---------------- STEPPER -----------------------------//
+  DDRB &= ~((1<<ENABLE)|(1<<MODE0)|(1<<MODE1)); // DIRECTION, OUTPUT
+  DDRD &= ~((1<<MODE2)|(1<<DIR)|(1<<STEP)); // DIRECTION, OUTPUT
+  setuSteps();
+  ENABLE_HIGH
+  if(direccion == 1)
+  {
+    PORTD |= (1<<DIR);
+  }
+  else
+  {
+    PORTD &= ~(1<<DIR);
+  }
+}
+
+inline void Bomba::timer1SetUp()
 {
 // --------------------- TIMER1 16B ------------------------/
   TCCR1A = 0;
@@ -14,9 +77,41 @@ void Bomba::Init()
   TCNT1  = 0; //contador
   OCR1A  = 6250; //0.1s
   TCCR1B |= (1<<WGM12); //MODO 4 CTC
-  TIMER1_ON();  //seleccion de prescaler y fuente de reloj
+  TIMER1_ON();  //seleccion de prescaler 1024 y fuente de reloj
   TIMSK1 |= (1 << OCIE1A); //MASCARA DE INTERRUPCION
   TIMER1_OFF;
+}
+
+inline void setuSteps()
+{
+  PORTD &= ~((1<<MODE2));
+  PORTB &= ~((1<<MODE0)|(1<<MODE1));
+  switch (MICROSTEPS)
+  {
+    case 1:
+    break;
+
+    case 2:
+      PORTB |= (1<<MODE0);
+    break;
+
+    case 4:
+      PORTB |= (1<<MODE1);
+    break;
+
+    case 8:
+      PORTB |= (1<<MODE0)|(1<<MODE1);
+    break;
+
+    case 16:
+      PORTD |= (1<<MODE2);
+    break;
+
+    case 32:
+      PORTD |= (1<<MODE2);
+      PORTB |= (1<<MODE0);
+    break;
+  }
 }
 
 bool Bomba::Bombear(float flujo)
