@@ -1,14 +1,26 @@
 #include "variables.h"
 
+
+
+
 LiquidCrystal_I2C lcd(I2C_ADD, COL, ROW);
+
+
+
+
 
 void setup()
 {
+  // ---------------- STEPPER -----------------------------//
+  DDRB &= ~((1<<ENABLE)|(1<<MODE0)|(1<<MODE1)|(1<<RST)); // DIRECTION, OUTPUT
+  DDRB |= (1<<FLT); // DIRECTION, OUTPUT
+  DDRD &= ~((1<<MODE2)|(1<<DIR)|(1<<STEP)|(1<<SLP)); // DIRECTION, OUTPUT
+  setuSteps();
+  ENABLE_HIGH
   // ------------------------SERIAL --------------------------/
   UCSR0B |= (1<<TXEN0)|(1<<RXEN0); //INTERRUPCION
   UBRR0L = 103;  // 9600 BAUDS
   UCSR0B |= (1<<RXCIE0);//RX
-
   // --------------------- TIMER1 16B ------------------------/
   TCCR1A = 0;
   TCCR1B = 0;
@@ -18,23 +30,15 @@ void setup()
   TIMSK1 |= (1 << OCIE1A); //MASCARA DE INTERRUPCION
   TIMER1_ON();  //seleccion de prescaler 1024 y fuente de reloj
   TIMER1_OFF;
-  
   // ---------------- EEEPROM -----------------------------//
   recuperarVariables(); //PARAMETRO DE CALIBRACION EEEPROM
-  ml_rev = ml_revs[diametro];
+  ml_rev = array_ml_rev[diametro];
   pasoProporcion = ml_rev;
   pasoFlujo = ml_rev;
   pasoVolumen = ml_rev;
   flujoMax = RPMAX * ml_rev;
   flujoMin = RPMMIN * ml_rev;
   flujoPSMax = flujoMax/60.00;
-
-  // ---------------- STEPPER -----------------------------//
-  DDRB &= ~((1<<ENABLE)|(1<<MODE0)|(1<<MODE1)|(1<<RST)); // DIRECTION, OUTPUT
-  DDRB |= (1<<FLT); // DIRECTION, OUTPUT
-  DDRD &= ~((1<<MODE2)|(1<<DIR)|(1<<STEP)|(1<<SLP)); // DIRECTION, OUTPUT
-  setuSteps();
-  ENABLE_HIGH
   if(sentido == 1)
   {
     PORTD |= (1<<DIR);
@@ -43,21 +47,20 @@ void setup()
   {
     PORTD &= ~(1<<DIR);
   }
-
   // ------------------------GPIOs --------------------------/
   DDRD &= ~((1<<DDD2)|(1<<DDD3)|(1<<DDD4)); // DIRECTION, INPUT
-  // CONFIGURAR PUERTO D SIN PULL UP RS //clearing bits 2-4
+    // CONFIGURAR PUERTO D SIN PULL UP RS //clearing bits 2-4
   PORTD |= (1<<DDD2)|(1<<DDD3)|(1<<DDD4);
-  //The falling edge of INT0 generates an interrupt request.
-  //The falling edge of INT1 generates an interrupt request.
+    //The falling edge of INT0 generates an interrupt request.
+    //The falling edge of INT1 generates an interrupt request.
   EICRA |= (1<<ISC11)|(1<<ISC01);
-  // MASCARA PIN PAD D2 D3  
+    // MASCARA PIN PAD D2 D3  
   EIMSK |= (1<<INT0) | (1<<INT1);
-  //MASCARA PIN 4
+    //MASCARA PIN 4
   PCMSK2 |= (1<<PCINT20);
-  // HABILITAD LA INTERRUPCION DEL PUERTO PCINT18,19,20 | D2-D4
+    // HABILITAD LA INTERRUPCION DEL PUERTO PCINT18,19,20 | D2-D4
   PCICR  |=  (1<<PCIE2);
-  // CONFIGURACION DE INTERRUPCIONES
+    // CONFIGURACION DE INTERRUPCIONES
   SREG   |=  (1 << 7); // GLOBAL INTERRUPT ENABLE
   
       // ------------------------lCD --------------------------/
@@ -68,19 +71,25 @@ void setup()
   lcd.createChar(2, pause);
   lcd.createChar(3, revolucion);
   LCD();
-
   //------------ SECUENCIA DE INICIO --------------------------/
   Serial.println("CONFIGURADO");
   cadena.reserve(16);
   calcularTocs();
 }
 
+
+
+
+
 void loop()
 {
+  //TERMINAR PULSO DE STEP
   if(flagTimer==1)
   {
     flagTimer=0;
+    delayMicroseconds(20);
     //Serial.println("INTERRUPT");
+    STEP_LOW
   }
   //ENCODER
   if(flagPush == 1)
@@ -96,7 +105,7 @@ void loop()
     Cursor();
   }
   // ENCENDER MOTOR
-  if(estado == 1)
+  if(estado == 1 && error == 0) 
   {
     if(modo == MODO_BOMBA)
     {
@@ -132,9 +141,19 @@ void loop()
   } 
   else if(estado =0) //APAGAR MOTOR
   {
-    //MotorOff();
+    MotorOff();
   }
-  
+  // VER COMUNICACION
+  RX();
+}
+
+
+
+
+
+/* ---------------- METODOS PARA MENU ---------------- */
+inline void RX()
+{
   // RECEPCION DE SERIAL.
   if (Serial.available())
   {
@@ -147,135 +166,215 @@ void loop()
         if(cadena.startsWith("E"))  //CAMBIAR ON/OFF
         {
           cadena.remove(0,1);
-          estado = cadena.toInt();
+          estado = cadena.toInt();          
           if(estado == 0)
           {
-            if(modo == 0) // BOMBA
+            if(modo == MODO_BOMBA) // BOMBA
             {
               Serial.println("PARANDO BOMBA");
             }
-            else if(modo == 1) // DOSIFICADOR
+            else if(modo == MODO_DOSIFICADOR) // DOSIFICADOR
             {
               Serial.println("PARANDO DOSIFICADOR");
             }
-            else if(modo == 2) // CALIBRACION
+            else if(modo == MODO_CALIBRACION) // CALIBRACION
             {
               Serial.println("PARANDO CALIBRACION");
             }
           }
           else
           {
-            if(modo == 0) // BOMBA
+            if(modo == MODO_BOMBA) // BOMBA
             {
               Serial.println("ARRANCANDO BOMBA");
             }
-            else if(modo == 1) // DOSIFICADOR
+            else if(modo == MODO_DOSIFICADOR) // DOSIFICADOR
             {
               Serial.println("ARRANCANDO DOSIFICADOR");
             }
-            else if(modo == 2) // CALIBRACION
+            else if(modo == MODO_CALIBRACION) // CALIBRACION
             {
               Serial.println("ARRANCANDO CALIBRACION");
             }
           }
         }
-        else if(cadena.startsWith("F")) //EDITAR FLUJO - BOMBA
+        // PARAMETROS DE MODO BOMBA
+        else if(cadena.startsWith("F")) 
         {
           cadena.remove(0,1);
-          int flujoTemp = cadena.toFloat();
-
-          if(flujoTemp <= flujoMax && flujoTemp >= flujoMin)
-          {
-            error = 0;
-            Serial.println("INICIANDO BOMBA");
-            flujo = flujoTemp;
-            modo = 0; //MODO BOMBA
-          }
-          else
+          float flujoTemp = cadena.toFloat();
+          // VALIDACION
+          if(validar(flujoTemp,flujoMin,flujoMax)==-1)
           {
             error = 1;
             Serial.println("FLUJO INVALIDO");
           }
+          else
+          {
+            error = 0;
+            Serial.println("FLUJO EDITADO");
+            flujo = flujoTemp;
+            modo = MODO_BOMBA;
+          }
         }
+        // PARAMETROS DE MODO BOMBA
+
+        // PARAMETROS DE MODO DOSIFICADOR
         else if(cadena.startsWith("P")) //PAUSA
         {
           Serial.println("INICIANDO DOSIFICADOR");
           cadena.remove(0,1);
-          pausa = cadena.toInt();
-          modo = 1; //MODO DOSIFICADOR
+          int pausaTemp = cadena.toInt();
+          // VALIDAR
+          if(validar(pausaTemp,pausaMin,pausaMax)==-1)
+          {
+            error = 1;
+            Serial.println("FLUJO INVALIDO");
+          }
+          else
+          {
+            error = 0;
+            Serial.println("FLUJO EDITADO");
+            pausa = pausaTemp;
+            modo = MODO_DOSIFICADOR;
+          }   
         }
         else if(cadena.startsWith("V")) //VOLUMEN
         {
           Serial.println("INICIANDO DOSIFICADOR");
           cadena.remove(0,1);
-          volumen = cadena.toFloat();
-          // calcular tiempo maximo
-          modo = 1; //MODO DOSIFICADOR
-          //calcularTocs();
+          float volumenTemp = cadena.toFloat();
+          // VALIDAR
+          if(validar(volumenTemp,volumenMin,volumenMax)==-1)
+          {
+            error = 1;
+            Serial.println("VOLUMEN INVALIDO");
+          }
+          else
+          {
+            error = 0;
+            Serial.println("VOLUMEN EDITADO");
+            volumen = volumenTemp;
+            modo = MODO_DOSIFICADOR;
+          }
         }
         else if(cadena.startsWith("T")) //TIEMPO
         {
           Serial.println("INICIANDO DOSIFICADOR");
           cadena.remove(0,1);
-          tiempo = cadena.toInt();
-          modo = 1; //MODO DOSIFICADOR
-          //calcularTocs();
+          int tiempoTemp = cadena.toInt();
+          // VALIDAR
+          if(validar(tiempoTemp,tiempoMin,tiempoMax)==-1)
+          {
+            error = 1;
+            Serial.println("TIEMPO INVALIDO");
+          }
+          else
+          {
+            error = 0;
+            Serial.println("TIEMPO EDITADO");
+            tiempo = tiempoTemp;
+            modo = MODO_DOSIFICADOR;            
+          }
         }
         else if(cadena.startsWith("Q")) //DISPAROS TOTALES
         {
           Serial.println("INICIANDO DOSIFICADOR");
           cadena.remove(0,1);
-          disparosTotal = cadena.toInt();
-          modo = 1; //MODO DOSIFICADOR
-        }
-        else if(cadena.startsWith("D")) //diametro y dselector
-        {
-          cadena.remove(0,1);
-          int diametroTemp = cadena.toInt();
-          if(diametroTemp >= diametroMin && diametroTemp <= diametroMax)
+          int disparosTemp = cadena.toInt();
+          // VALIDAR
+          if(validar(disparosTemp,disparosMin,disparosmax)==-1)
           {
-            diametro = diametroTemp;
-            modo = 2;
-            Serial.print(" dselector: ");
-            Serial.println(direccion_diametro);
-            Serial.print(" proporcion: ");
-            Serial.println(ml_rev,3);
+            error = 1;
+            Serial.println("DISPAROS INVALIDO");
           }
           else
           {
-            Serial.print(" DIAMETRO INVALIDO: ");
+            error = 0;
+            Serial.println("DISPAROS EDITADO");
+            disparosConteo = disparosTemp;
+            modo = MODO_DOSIFICADOR;
           }
-
         }
-        else if(cadena.startsWith("S")) //direccion
+        // PARAMETROS DE MODO DOSIFICADOR
+
+        // PARAMETROS DE MODO CALIBRACION + GUARDAR CONFIGURACION EEPROM
+        else if(cadena.startsWith("D")) // DIAMETRO
+        {
+          cadena.remove(0,1);
+          int diametroTemp = cadena.toInt();
+          // VALIDAR
+          if(validar(diametroTemp,diametroMin,diametroMax)==-1)
+          {
+            error = 1;
+            Serial.println("diametro INVALIDO");
+          }
+          else
+          {
+            error = 0;
+            Serial.println("diametro EDITADO");
+            Serial.println("PROPORCION CAMBIADA");
+            diametro = diametroTemp;
+            ml_rev = array_ml_rev[diametro];
+            modo = MODO_CALIBRACION;
+            guardarVariable(GUARDAR_DIAMETRO);
+          }
+        }
+        else if(cadena.startsWith("S")) // SENTIDO
         {
           cadena.remove(0,1);
           sentido = cadena.toInt();
           if(sentido == 1)
           {
             DIR_CW
+            modo = MODO_CALIBRACION;
+            guardarVariable(GUARDAR_SENTIDO);
+          }
+          else if(sentido == 0)
+          {
+            DIR_ACW
+            modo = MODO_CALIBRACION;
+            guardarVariable(GUARDAR_SENTIDO);
+          }
+
+        }
+        else if(cadena.startsWith("R")) // PROPORCION
+        {
+          cadena.remove(0,1);
+          float proporcionTemp = cadena.toFloat();  
+                    // VALIDAR
+          if(validar(proporcionTemp,proporcionMin,proporcionMax)==-1)
+          {
+            error = 1;
+            Serial.println("PROPORCION INVALIDA");
           }
           else
           {
-            DIR_ACW
+            error = 0;
+            Serial.println("PROPORCION GUARDADA");
+            ml_rev = proporcionTemp;
+            array_ml_rev[diametro] = ml_rev;
+            pasoFlujo = ml_rev;
+            modo = MODO_CALIBRACION;
+            guardarVariable(GUARDAR_PROPORCION);
+          }          
+        }
+        else if(cadena.startsWith("U")) //DEBUG SOLAMENTE.
+        {
+          cadena.remove(0,1);
+          if(array_microsteps.indexOf(cadena)>0)
+          {
+            microstep = cadena.toInt();
+            setuSteps();
+            Serial.println("MICROSTEP EDITADO");
           }
-          modo = 2;
+          else
+          {
+            Serial.println("MICROSTEP INVALIDO");
+          }
+          
         }
-        else if(cadena.startsWith("R")) //proporcion
-        {
-          cadena.remove(0,1);
-          ml_rev = cadena.toFloat();
-          ml_revs[direccion_diametro] = ml_rev;
-          pasoFlujo = ml_rev;
-          modo = 2;
-        }
-        else if(cadena.startsWith("U")) //proporcion
-        {
-          cadena.remove(0,1);
-          MICROSTEPS = cadena.toInt();
-          //calcularTocs();
-          setuSteps();
-        }
+        // PARAMETROS DE MODO CALIBRACION + GUARDAR CONFIGURACION EEPROM
       }
       cadena = ""; // borrar cadena
     }
@@ -293,7 +392,28 @@ void loop()
     }
   }
 }
-
+inline float validar(float temp, float min, float max)
+{
+  if(temp <= max && temp >= min)
+  {
+    return temp;
+  }
+  else
+  {
+    return -1.0;
+  }
+}
+inline int validar(int temp, int min, int max)
+{
+  if(temp <= max && temp >= min)
+  {
+    return temp;
+  }
+  else
+  {
+    return -1;
+  }
+}
 void LCD()
 {
   if(etapa == ETAPA_MODOS)  // MENU INICIO
@@ -366,7 +486,7 @@ void LCD()
       if(parametro == PARAMETRO_DIAMETRO)
       {
 
-        lcd.print("DIAMETRO:");
+        lcd.print("diametro:");
         lcd.setCursor(1,1);
         lcd.print(diametro);
         lcd.print("mm");
@@ -445,7 +565,6 @@ void LCD()
     lcd.write(byte(0)); // FLECHITA
   }
 }
-
 inline void ActualizarConteo()
 {
   lcd.setCursor(11,1);
@@ -453,7 +572,6 @@ inline void ActualizarConteo()
   lcd.print("/");
   lcd.print(disparosTotal);
 }
-
 inline void Cursor()
 {
   if(etapa == ETAPA_MODOS || etapa == ETAPA_PARAMETROS)
@@ -481,7 +599,6 @@ inline void Cursor()
     }
   }
 }
-
 void Push()
 {
   if(etapa == ETAPA_MODOS || etapa == ETAPA_PARAMETROS)
@@ -504,7 +621,6 @@ void Push()
     }
   }
 }
-
 void Encoder()
 {
   if(flagEncoder == 3)
@@ -520,7 +636,6 @@ void Encoder()
     LCD();
   }
 }
-
 void Sumar()
 {
   if(config == 0) // MOVERSE A TRAVES DE MENUS
@@ -625,7 +740,7 @@ void Sumar()
           }
         }      
       }
-      else if(modo == MODO_CALIBRACION) // MODO CALIBRACION CONTROL DIAMETRO, PROPORCION, sentido
+      else if(modo == MODO_CALIBRACION) // MODO CALIBRACION CONTROL diametro, PROPORCION, sentido
       {
         if(parametroCalibracion == PARAMETRO_DIAMETRO)
         {
@@ -652,7 +767,6 @@ void Sumar()
     }
   }
 }
-
 void Restar()
 {
   if(config == 0) // MOVERSE A TRAVES DE MENUS
@@ -751,7 +865,7 @@ void Restar()
           }
         }      
       }
-      else if(modo == MODO_CALIBRACION) // MODO CALIBRACION CONTROL DIAMETRO, PROPORCION, sentido
+      else if(modo == MODO_CALIBRACION) // MODO CALIBRACION CONTROL diametro, PROPORCION, sentido
       {
         if(parametroCalibracion == PARAMETRO_DIAMETRO)
         {
@@ -778,24 +892,13 @@ void Restar()
     }
   }
 }
+/* ----------------  METODOS PARA MENU ----------------  */
 
-void salvarVariable(int posicion)
-{
-  int direccion_calibracion = 32*diametro;
-  switch (posicion)
-  {
-    case 0:
-      EEPROM.update(direccion_calibracion, ml_revs[diametro]);
-    break;
-    case 1:
-      EEPROM.update(direccion_diametro, diametro);
-    break;
-    case 2:
-      EEPROM.update(direccion_sentido, sentido);
-    break;
-  }
-}
 
+
+
+
+/* ----------------  METODOS PARA CALCULAR  ---------------- */
 void calcularTocs()
 {
   float volumenLocal;
@@ -805,7 +908,7 @@ void calcularTocs()
   float g;
   long pasos; 
   float velocidad;
-  long clics = RELOJ/array_prescaler[prescaler];
+  long clics = RELOJ/prescaler;
   // OBTENER EL VOLUMEN TOTAL A DESPLAZAR
   if(modo == MODO_BOMBA)
   {
@@ -829,22 +932,22 @@ void calcularTocs()
   /*
   if(flujoLocal > 3)
   {
-    MICROSTEPS = 4; 
+    microstep = 4; 
     setuSteps();
   }
   else if(flujoLocal > 2)
   {
-    MICROSTEPS = 8; 
+    microstep = 8; 
     setuSteps();
   }
   else if(flujoLocal > 1)
   {
-    MICROSTEPS = 16; 
+    microstep = 16; 
     setuSteps();
   }
   else if(flujoLocal > 0)
   {
-    MICROSTEPS = 32; 
+    microstep = 32; 
     setuSteps();
   }
   */
@@ -870,7 +973,7 @@ void calcularTocs()
   g_ml = (1.0/(ml_rev/360));
   g = g_ml * volumenLocal;
   pasos = (long) g / G_PASO;
-  pasosTotales = pasos*MICROSTEPS;
+  pasosTotales = pasos*microstep;
   velocidad = pasosTotales/ (float) tiempoLocal; 
   tocs = clics / velocidad / 2;
 
@@ -878,9 +981,9 @@ void calcularTocs()
   {
     Serial.print("\n\n");
     Serial.print("uStep: ");
-    Serial.println(MICROSTEPS);
+    Serial.println(microstep);
     Serial.print("prescaler: ");
-    Serial.println(array_prescaler[prescaler]);
+    Serial.println(prescaler);
     Serial.print("volumenLocal: ");
     Serial.println(volumenLocal);
     Serial.print("Flujomax: ");
@@ -928,29 +1031,29 @@ void calcularTocs()
   }
   contadorPasos = 0;
   resolucion = (float) prescaler/16;
-  pasosTotales = (long) (volumenLocal*MICROSTEPS)/((g_paso/(360/ml_rev)));
+  pasosTotales = (long) (volumenLocal*microstep)/((g_paso/(360/ml_rev)));
   if(pasosTotales > 40000)
   {
-    MICROSTEPS = 4;
+    microstep = 4;
     setuSteps();
   }
   else if(pasosTotales > 32000)
   {
-    MICROSTEPS = 8;
+    microstep = 8;
     setuSteps();
   }
     else if(pasosTotales > 16000)
   {
-    MICROSTEPS = 16;
+    microstep = 16;
     setuSteps();
   }
-  pasosTotales = (long) (volumenLocal*MICROSTEPS)/((g_paso/(360/ml_rev)));
+  pasosTotales = (long) (volumenLocal*microstep)/((g_paso/(360/ml_rev)));
   velocidad = (float) pasosTotales/tiempoLocal;
   periodo = (long) round(1000000/velocidad);
   tocs = (long) round(periodo/(resolucion));
   if(modo == MODO_DOSIFICADOR) // VELOCIDAD POR DEFECTO PARA CALIBRACION
   {
-    pasosTotales = 2*MOTOR_STEPS*MICROSTEPS;
+    pasosTotales = 2*MOTOR_STEPS*microstep;
     tocs = 200; // CALCULAR
   }
   else if(tocs < limtocs) //EXCESO DE ACELERACION
@@ -964,12 +1067,42 @@ void calcularTocs()
   Serial.println(tocs);
 }
 */
-
 void validarTocs()
 {
   
 }
+void Calibrar(int opcion)
+{
+  guardarVariable(opcion); // diametro
+  switch(opcion)
+  {
+    case 0: // PROPORCION
+      ml_rev = array_ml_rev[diametro];
+      flujoMax = RPMAX * ml_rev;
+      flujoMin = RPMMIN * ml_rev;
+      flujoPSMax = flujoMax/60.00;
+      pasoFlujo = ml_rev;
+      pasoVolumen = ml_rev;
+      TiempoMin();
+    break;
+    case 1: // diametro
+    break;
+    case 2: // sentido
+    break;
+  }
+}
+inline void TiempoMin()
+{
+  tiempoMin = (int) round(volumen/flujoPSMax);
+  tiempo = tiempoMin + 1;
+}
+/* ----------------  METODOS PARA CALCULAR ----------------  */
 
+
+
+
+
+/* ----------------  METODOS EEPROM ---------------- */
 void recuperarVariables()
 {
   bool primeraVez;
@@ -979,7 +1112,7 @@ void recuperarVariables()
     Serial.println("VARIABLES CARGADAS");
     for(int o = diametroMin; o <= diametroMax; o++)
     {
-      EEPROM.get(32*o, ml_revs[o]);
+      EEPROM.get(32*o, array_ml_rev[o]);
     }
     EEPROM.get(direccion_diametro, diametro);
     EEPROM.get(direccion_sentido, sentido);  
@@ -1000,11 +1133,33 @@ void recuperarVariables()
     }
   } 
 }
+void guardarVariable(int posicion)
+{
+  int direccion_calibracion = 32*diametro;
+  switch (posicion)
+  {
+    case 0:
+      EEPROM.update(direccion_calibracion, array_ml_rev[diametro]);
+    break;
+    case 1:
+      EEPROM.update(direccion_diametro, diametro);
+    break;
+    case 2:
+      EEPROM.update(direccion_sentido, sentido);
+    break;
+  }
+}
+/* ----------------  METODOS EEPROM ----------------  */
 
+
+
+
+
+/* ----------------  METODOS PARA STEPPER ----------------  */
 inline void setuSteps()
 {
   PORTB &= ~((1<<MODE2)|(1<<MODE0)|(1<<MODE1));
-  switch (MICROSTEPS)
+  switch (microstep)
   {
     case 1:
       PORTB &= ~((1 << MODE0) | (1 << MODE1)| (1 << MODE2));
@@ -1032,28 +1187,6 @@ inline void setuSteps()
     break;
   }
 }
-
-void Calibrar(int opcion)
-{
-  salvarVariable(opcion); // diametro
-  switch(opcion)
-  {
-    case 0: // PROPORCION
-      ml_rev = ml_revs[diametro];
-      flujoMax = RPMAX * ml_rev;
-      flujoMin = RPMMIN * ml_rev;
-      flujoPSMax = flujoMax/60.00;
-      pasoFlujo = ml_rev;
-      pasoVolumen = ml_rev;
-      TiempoMin();
-    break;
-    case 1: // DIAMETRO
-    break;
-    case 2: // sentido
-    break;
-  }
-}
-
 inline void MotorOn()
 {
   ENABLE_LOW
@@ -1063,17 +1196,15 @@ inline void MotorOn()
   TIMER1_ON();
   Cursor();
 }
-
 inline void MotorOff()
 {
   TIMER1_OFF
-  //ENABLE_HIGH
+  ENABLE_HIGH
   Cursor();
 }
-
 inline void TIMER1_ON()
 {
-  switch (array_prescaler[prescaler]) {
+  switch (prescaler) {
     case 1:
       TCCR1B &= ~((1 << CS12) | (1 << CS11));
       TCCR1B |= (1 << CS10);
@@ -1100,12 +1231,13 @@ inline void TIMER1_ON()
     break;
   }
 }
-inline void TiempoMin()
-{
-  tiempoMin = (int) round(volumen/flujoPSMax);
-  tiempo = tiempoMin + 1;
-}
+/* ----------------  METODOS PARA STEPPER ----------------  */
 
+
+
+
+
+/* ----------------  INTERRUPCIONES ----------------  */
 ISR(INT0_vect)  //statusD = PIND; //INTERRUPCION POR PUSH
 {
   delay(2);
@@ -1115,7 +1247,6 @@ ISR(INT0_vect)  //statusD = PIND; //INTERRUPCION POR PUSH
     flagPush = 1;
   }
 }
-
 ISR(INT1_vect)  // INTERRUPCION ENCODER DT PADPD3 DT
 {
   delay(2);
@@ -1137,7 +1268,6 @@ ISR(INT1_vect)  // INTERRUPCION ENCODER DT PADPD3 DT
     }
   }
 }
-
 ISR(PCINT2_vect)  // INTERRUPCION CLK.  PADPD4 CLK
 {
   delay(2);
@@ -1176,9 +1306,9 @@ ISR(PCINT2_vect)  // INTERRUPCION CLK.  PADPD4 CLK
     }
   }
 }
-
-ISR(TIMER1_COMPA_vect)
+ISR(TIMER1_COMPA_vect)  //INTERRUPCION TIMER
 {
   flagTimer = 1;
-  TOGGLE_STEP
+  STEP_HIGH
 }
+/* ----------------  INTERRUPCIONES ----------------  */

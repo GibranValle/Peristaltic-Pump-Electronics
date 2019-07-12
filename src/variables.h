@@ -1,3 +1,11 @@
+/*
+PCB VERSION 1.0.6
+RX FUNCIONANDO
+STEPPER FUNCIONANDO
+TIMER FUNCIONANDO
+ENCODER FUNCIONANDO
+LCD MEJORABLE
+ */
 #include <Arduino.h>
 #include <math.h>
 #include <EEPROM.h>
@@ -16,6 +24,9 @@ byte revolucion[8] = {B00000, B11111, B10001, B00001, B11101, B11001, B10111};
 int direccion_diametro = 200;
 int direccion_sentido = 216;
 int direccion_inicializado = 232;
+#define GUARDAR_PROPORCION          0 
+#define GUARDAR_DIAMETRO            1
+#define GUARDAR_SENTIDO             2
 //CONSTANTES DE MENU
 #define ETAPA_MAXIMA                2
 #define ETAPA_MINIMA                0
@@ -56,19 +67,18 @@ int pausa = 5;
 int disparosConteo = 0;
 int disparosTotal = 1;
 bool sentido = 1;
-// LIMITES DE MENU
+// CONSTANTES DE MENU
 int disparosmax = 99;
 int tiempoMax = 99;
 int pausaMax = 99;
+int pausaMin = 0;
 float proporcionMax = 3.0;
 float proporcionMin = 0.005;
-int diametroMax = 4;
+int diametroMax = 5;
 int diametroMin = 1;
 bool sentidoMax = 1;
 bool sentidoMin = 0;
 int disparosMin = 1;
-int pausaMin = 0;
-
 
 // LIMITES FISICOS DEL MOTOR
 #define RPMAX           250
@@ -84,7 +94,7 @@ int pausaMin = 0;
 #define SLP       DDD7  //PD7
 #define STEP      DDD6  //PD6 
 #define DIR       DDD5  //PD5
-#define RELOJ 16000000
+#define RELOJ       16000000
 #define G_PASO      1.8
 #define STEP_HIGH         PORTD |=  (1<<STEP);
 #define STEP_LOW          PORTD &= ~(1<<STEP);
@@ -92,17 +102,20 @@ int pausaMin = 0;
 #define DIR_ACW           PORTD &= ~(1<<DIR);
 #define TIMER1_OFF        TCCR1B &= ~((1 << CS12) | (1 << CS11)| (1 << CS10));
 #define TOGGLE_STEP       PIND = PIND | (1<<STEP);
+#define STEP_HIGH         PORTD |= (1<<STEP);
+#define STEP_LOW          PORTD &= ~(1<<STEP);
 #define ENABLE_HIGH       PORTB |= (1<<ENABLE);
 #define ENABLE_LOW        PORTB &= ~(1<<ENABLE);
 //VARIABLES PARA CALCULOS
 float ml_rev;
-float ml_revs[8];
+float array_ml_rev[6];
 unsigned long tocs;
 unsigned long pasosTotales;
-int prescaler = 3;
-int array_prescaler[5] = {1, 8, 64, 256, 1024};
-int MICROSTEPS = 32;
-short diametro = 4;
+String array_prescaler = "1,8,64,256,1024";
+int prescaler = 1024;
+String array_microsteps = "1,2,4,8,16,32";
+int microstep = 32;
+int diametro = 4;
 float pasoFlujo;
 float pasoVolumen;
 float volumenMax;
@@ -147,10 +160,13 @@ void LCD();
 void Sumar();
 void Restar();
 void recuperarVariables();
-void salvarVariable(int posicion);
+void guardarVariable(int posicion);
 void calcularTocs();
 void setuSteps();
 void Calibrar(int opcion);
+inline void RX();
+inline float validar(float temp, float min, float max);
+inline int validar(int temp, int min, int max);
 inline void ActualizarConteo();
 inline void Cursor();
 inline void MotorOn();
