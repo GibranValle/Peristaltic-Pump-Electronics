@@ -32,7 +32,7 @@ void setup()
   // --------------------- TIMER1 16B ------------------------/
   TCCR1A = 0;
   TCCR1B = 0;
-  TCNT1  = 0; //contador
+  //TCNT1  = 0; //contador
   OCR1A  = 625; //0.1s
   TCCR1B |= (1<<WGM12); //MODO 4 CTC
   TIMSK1 |= (1 << OCIE1A); //MASCARA DE INTERRUPCION
@@ -72,7 +72,10 @@ void setup()
     // CONFIGURACION DE INTERRUPCIONES
   SREG   |=  (1 << 7); // GLOBAL INTERRUPT ENABLE
   //------------ SECUENCIA DE INICIO --------------------------/
-  Serial.println("CONFIGURADO");
+  if(debugMode)
+  {
+    Serial.println("CONFIGURADO");
+  }
   cadena.reserve(16);
   calcularTocs();
 }
@@ -83,67 +86,70 @@ void setup()
 
 void loop()
 {
-  //TERMINAR PULSO DE STEP
+  // INTERRUPCION DE TIMER
   if(flag_timer==1)
   {
     flag_timer=0;
     delayMicroseconds(20);
-    //Serial.println("INTERRUPT");
     STEP_LOW
+    //TERMINAR PULSO DE STEP
   }
-  //encoder
+  // INTERRUPCION DE ENCODER PUSH
   if(flag_push == 1)
   {
     push();
     flag_push = 0;
     cursor();
   }
+  // INTERRUPCION DE ENCODER GIRO
   if(flag_encoder == 3 || flag_encoder == 6)
   {
     encoder();
     LCD();
     cursor();
   }
-  // ENCENDER MOTOR
-  if(estado == 1) 
+  // CICLO DE DOSIFICACIÓN
+  if(modo == MODO_DOSIFICADOR && estado == 1)
   {
-    if(modo == MODO_BOMBA)
+    if(disparos_conteo <= disparos_total)
     {
-      motorOn();
-      estado=2; //NO CALCULAR OTRA VEZ
-    }
-    if(modo == MODO_DOSIFICADOR) 
-    {
-      if(contador_pasos > pasos_totales)  //BOMBA COMPLETO PASOS
+      if(contador_pasos == 0)
       {
-        motorOff();
-        Serial.print(" DOSIS N TERMINADA");
-        if(disparos_conteo < disparos_total)
+        if(debugMode)
         {
-          disparos_conteo += 1;
-          contador_pasos = 0; 
-          if(disparos_conteo == disparos_total)
-          {
-            disparos_conteo = 0;
-            motorOff();
-            Serial.print(" DOSIFICACION TERMINADA");
-          }
-          else
-          {
-            actualizarConteo();
-            delay(pausa*1000);
-            motorOn();
-          }
+          Serial.println("DISPARO TERMINADO");
+          Serial.print("disparo: ");
+          Serial.println(disparos_conteo);
         }
+        motorOn();
+        iconoBombeando(1);
+        actualizarConteo();
       }
-      contador_pasos = contador_pasos+1;
+      else if(contador_pasos >= pasos_por_disparo)
+      {
+        if(debugMode)
+        {
+          Serial.println("DISPARO TERMINADO");
+        }
+        iconoBombeando(0);
+        disparos_conteo += 1;
+        motorOff();
+        delay(pausa*1000);
+        contador_pasos = 0;
+      }
     }
-  } 
-  else if(estado =0) //APAGAR MOTOR
-  {
-    motorOff();
+    else if(disparos_conteo == disparos_total+1)
+    {
+      estado = 0;
+      motorOff();
+      iconoBombeando(0);
+      if(debugMode)
+      {
+        Serial.print(" DOSIFICACION TERMINADA");
+      }
+    }    
   }
-  // VER COMUNICACION
+  // COMUNICACION
   RX();
 }
 
@@ -161,13 +167,17 @@ inline void RX()
       finRX = false;
       if(cadena.length()>1)
       {
-        Serial.println(cadena);
+        if(debugMode)
+        {
+          Serial.println(cadena);
+        }
         if(cadena.startsWith("E"))  //CAMBIAR ON/OFF
         {
           cadena.remove(0,1);
           estado = cadena.toInt();          
           if(estado == 0)
           {
+            motorOff();
             if(modo == MODO_BOMBA) // BOMBA
             {
               Serial.println("PARANDO BOMBA");
@@ -177,6 +187,8 @@ inline void RX()
             {
               Serial.println("PARANDO DOSIFICADOR");
               modo = MODO_DOSIFICADOR;
+              iconoBombeando(0);
+              contador_pasos = 0;
             }
             else if(modo == MODO_CALIBRACION) // CALIBRACION
             {
@@ -193,7 +205,7 @@ inline void RX()
               cursor();
             }
           }
-          else
+          else // estado == 0
           {
             if(modo == MODO_BOMBA) // BOMBA
             {
@@ -202,6 +214,8 @@ inline void RX()
               modo = MODO_BOMBA;
               LCD();
               cursor();
+              calcularTocs();
+              motorOn();
             }
             else if(modo == MODO_DOSIFICADOR) // DOSIFICADOR
             {
@@ -210,6 +224,10 @@ inline void RX()
               modo = MODO_DOSIFICADOR;
               LCD();
               cursor();
+              calcularTocs();
+              iconoBombeando(0);
+              actualizarConteo();
+              motorOn();
             }
             else if(modo == MODO_CALIBRACION) // CALIBRACION
             {
@@ -643,6 +661,19 @@ void calibrar()
   lcd.write(byte(0)); // FLECHITA  
 }
 
+inline void iconoBombeando(bool activo)
+{
+  lcd.setCursor(10,1);
+  if(activo)
+  {
+    lcd.write(byte(3)); // BOMBEANDO  
+  }
+  else
+  {
+    lcd.print(" ");
+  }
+}
+
 inline void actualizarConteo()
 {
   lcd.setCursor(11,1);
@@ -687,23 +718,32 @@ inline void cursor()
 /* ---------------- METODOS PARA encoder ---------------- */
 void push()
 {
+  if(debugMode)
+  {
+    Serial.print("push");
+  }
   if(etapa == ETAPA_MODOS || etapa == ETAPA_PARAMETROS)
   {
     config ^= 1; //TOGGLE BIT
-    Serial.println("push");
   }
   else if(etapa == ETAPA_OPERACION)
   {
-    estado ^= 1; //TOGGLE BIT
-    if(estado)
+    if(modo == MODO_DOSIFICADOR && estado == 0)
     {
-      Serial.print("flujo: ");
-      Serial.println(flujo,2 );
+      contador_pasos = 0;
+      disparos_conteo = 1;
+      actualizarConteo();
+    }
+    estado = !estado; //TOGGLE BIT
+    if(estado == 1)
+    {
+      calcularTocs();
       motorOn();
     }
-    else
+    if(debugMode)
     {
-      motorOff();
+      Serial.println(estado);
+      Serial.println("");
     }
   }
 }
@@ -711,14 +751,20 @@ void encoder()
 {
   if(flag_encoder == 3)
   {
-    Serial.println("sumar");
+    if(debugMode)
+    {
+      Serial.println("sumar");
+    }
     sumar();
     flag_encoder = 0;
     LCD();
   }
   if(flag_encoder == 6)
   {
-    Serial.println("restar");
+    if(debugMode)
+    {
+      Serial.println("restar");
+    }
     restar();
     flag_encoder = 0;
     LCD();
@@ -789,10 +835,13 @@ void sumar()
           if(flujo < flujo_max)
           {
             flujo = flujo + paso_flujo;
-            Serial.print("paso_flujo: ");
-            Serial.println(paso_flujo);
-            Serial.print("flujo: ");
-            Serial.println(flujo);
+            if(debugMode)
+            {
+              Serial.print("paso_flujo: ");
+              Serial.println(paso_flujo);
+              Serial.print("flujo: ");
+              Serial.println(flujo);
+            }
           }
         }
       }
@@ -989,99 +1038,134 @@ void restar()
 /* ----------------  METODOS PARA CALCULAR  ---------------- */
 void calcularTocs()
 {
-  float volumenLocal;
-  int tiempoLocal;
-  float flujoLocal;
+  float volumen_local;
+  int tiempo_local;
   float g_ml;
   float g;
   long pasos; 
-  float velocidad;
+  float flujo_local;
   long clics = RELOJ/prescaler;
   // OBTENER EL VOLUMEN TOTAL A DESPLAZAR
   if(modo == MODO_BOMBA)
   {
     // volumen por minuto
-    volumenLocal = flujo;
-    tiempoLocal = 60; 
-    flujoLocal = volumenLocal/tiempoLocal;
+    flujo_local = flujo;
   }
   else if(modo == MODO_DOSIFICADOR)
   {
-    volumenLocal = volumen;
-    tiempoLocal = tiempo; 
-    flujoLocal = volumenLocal/tiempoLocal;
+    volumen_local = volumen;
+    tiempo_local = tiempo; 
+    flujo_local = volumen_local/(float)tiempo_local;
   }
   else if(modo == MODO_CALIBRACION)
   {
-    volumenLocal = flujo;
-    tiempoLocal = 60; 
-    flujoLocal = volumenLocal/tiempoLocal;
+    volumen_local = flujo;
+    tiempo_local = 60; 
+    flujo_local = volumen_local/tiempo_local;
   }
-  /*
-  if(flujoLocal > 3)
+  // VALIDAR FLUJOS
+  if(volumen_local >= 200 ||  flujo_local >= 200)
   {
-    microstep = 4; 
-    setuSteps();
+    microstep = 1;
   }
-  else if(flujoLocal > 2)
+  else if(volumen_local >= 100 ||  flujo_local >= 100)
   {
-    microstep = 8; 
-    setuSteps();
+    microstep = 2;
   }
-  else if(flujoLocal > 1)
+  else if(volumen_local >= 50 ||  flujo_local >= 50)
   {
-    microstep = 16; 
-    setuSteps();
+    microstep = 4;
   }
-  else if(flujoLocal > 0)
+  else if(volumen_local >= 25 ||  flujo_local >= 25)
   {
-    microstep = 32; 
-    setuSteps();
+    microstep = 8;
   }
-  */
-  // calcular grados totales
-  // mL/rev = mL/360°   ............................... volumen/grados
-  // 1/(mL/360°) ...................................... 1) grados/volumen
-  // grados/volumen * volumen ......................... 2) grados
-  // ° / (°/paso) ..................................... 3) pasos
-  // uSteps * pasos ................................... 4) pasos totales
-  // pasos totales / tiempo ........................... 5) velocidad
-  // 1/velocidad ...................................... 6) periodo
-  // clics * periodo/2 ................................ 7) tocs
-  // clics/velocidad/2 ................................ 6) tocs....
+  else if(volumen_local >= 12 ||  flujo_local >= 12)
+  {
+    microstep = 16;
+  }
+  else if(volumen_local >= 0 ||  flujo_local >= 0)
+  {
+    microstep = 32;
+  }
+  if(modo == MODO_BOMBA || modo == MODO_CALIBRACION)
+  {
+    // 1)
+    g_ml = (1.0/(ml_rev/360));  
+    // 2)
+    g = g_ml * flujo_local;    
+    // 3)
+    pasos = (long) g / G_PASO;  
+    // 4)
+    u_pasos = pasos*microstep;  
+    // 9)
+    tocs = clics / u_pasos;
+  }
+  else if(modo == MODO_DOSIFICADOR)
+  {
+    // 1)
+    g_ml = (1.0/(ml_rev/360));  
+    // 2)
+    g = g_ml * volumen_local;    
+    // 3)
+    pasos = (long) g / G_PASO;  
+    // 4)
+    u_pasos = pasos*microstep;  
+    pasos_por_disparo = u_pasos;
+    // 5)
+    pasos_por_dosis = u_pasos*disparos_total;
+    // 6)
+    g = g_ml * flujo_local;
+    // 7)
+    pasos = (long) g / G_PASO;
+    // 8)
+    u_pasos = pasos*microstep;
+    // 9)
+    tocs = clics / u_pasos;
+  }
+  /* FORMULARIO
+  1) CALCULAR GRADOS POR DISPARO  | 
+  2) CALCULAR PASOS POR DISPARO
+  3) CALCULAR MICROPASOS POR DISPARO
+  4) CALCULAR MICROPASOS POR DOSIFICACION
+    VELOCIDAD:
+  5) CALCULAR GRADOS POR SEGUNDO 
+  6) CALCULAR PASOS POR SEGUNDO 
+  7) CALCULAR MICROPASOS POR SEGUNDO  
 
-  // 1/(1.25mL/360°) =288°/mL
-  // 288°/mL * 20.00 mL = 5760°
-  // 5760° / (1.8°/paso)  = 3200 pasos
-  // 3200 pasos * 32us = 102400 upasos
-  // 102400upasos / 60s = 1706.6upasos/s 
-  // 1/1706.6upasos/s = 585.96us  
-  //  16 000 000 / 64 * 585.96/ 1 000 000 /2= 73 tocs
+  1) grados/volumen: 1/(mL/360)
+  2) grados: grados/volumen * volumen total 
+  3) pasos: grados * pasos/grado
+  4) micropasos: pasos*microstepping -> pasos por disparo
+  5) micropasos/dosificacion = micropasos * disparos totales -> pasos por dosis
+  VELOCIDAD TEORICA:
+  6) grados/s: grados/volumen * volumen/tiempo
+  7) pasos/s: grados/s * paso/grado
+  8) micropasos/s: pasos/s * microstepping
+  VELOCIDAD PWM
+  9) clics = reloj/prescaler
+  10) conteo timer = micropasos/s / clics/2
+   */
 
-  g_ml = (1.0/(ml_rev/360));
-  g = g_ml * volumenLocal;
-  pasos = (long) g / G_PASO;
-  pasos_totales = pasos*microstep;
-  velocidad = pasos_totales/ (float) tiempoLocal; 
-  tocs = clics / velocidad / 2;
-
-  if(estado == 0)
+  if(debugMode)
   {
     Serial.print("\n\n");
     Serial.print("uStep: ");
     Serial.println(microstep);
     Serial.print("prescaler: ");
     Serial.println(prescaler);
-    Serial.print("volumenLocal: ");
-    Serial.println(volumenLocal);
+    Serial.print("volumen_local: ");
+    Serial.println(volumen_local);
     Serial.print("flujo_max: ");
     Serial.println(flujo_max);
     Serial.print("Flujo_min: ");
     Serial.println(flujo_min);
     Serial.print("volumen_min: ");
     Serial.println(volumen_min);    
-    Serial.print("tiempoLocal: ");
-    Serial.println(tiempoLocal);
+    Serial.print("tiempo_local: ");
+    Serial.println(tiempo_local);
+    Serial.print("tiempo Min: ");
+    Serial.println(tiempo_min);
     Serial.print("mL/rev: ");
     Serial.println(ml_rev);
     Serial.print("g_ml: ");
@@ -1090,76 +1174,11 @@ void calcularTocs()
     Serial.println(g);
     Serial.print("pasos: ");
     Serial.println(pasos);
-    Serial.print("pasos_totales: ");
-    Serial.println(pasos_totales);
-    Serial.print("velocidad: ");
-    Serial.println(velocidad);
+    Serial.print("u_pasos: ");
+    Serial.println(u_pasos);
     Serial.print("tocs: ");
     Serial.println(tocs);
   }
-}
-/*
-void calcularTocs()
-{
-  flag_accelerar = 0;
-  float volumenLocal;
-  int tiempoLocal;
-  switch (modo)
-  {
-    case 0: // MODO BOMBA
-      volumenLocal = flujo;
-      tiempoLocal = 60/2;
-    break;
-
-    case 1: //MODO DOSIFICADOR
-      tiempoLocal = tiempo;
-      volumenLocal = volumen*2;
-      //DISPAROS
-      disparos_conteo = 0;
-      actualizarConteo();
-    break;
-  }
-  contador_pasos = 0;
-  resolucion = (float) prescaler/16;
-  pasos_totales = (long) (volumenLocal*microstep)/((g_paso/(360/ml_rev)));
-  if(pasos_totales > 40000)
-  {
-    microstep = 4;
-    setuSteps();
-  }
-  else if(pasos_totales > 32000)
-  {
-    microstep = 8;
-    setuSteps();
-  }
-    else if(pasos_totales > 16000)
-  {
-    microstep = 16;
-    setuSteps();
-  }
-  pasos_totales = (long) (volumenLocal*microstep)/((g_paso/(360/ml_rev)));
-  velocidad = (float) pasos_totales/tiempoLocal;
-  periodo = (long) round(1000000/velocidad);
-  tocs = (long) round(periodo/(resolucion));
-  if(modo == MODO_DOSIFICADOR) // VELOCIDAD POR DEFECTO PARA CALIBRACION
-  {
-    pasos_totales = 2*MOTOR_STEPS*microstep;
-    tocs = 200; // CALCULAR
-  }
-  else if(tocs < tocs_limite) //EXCESO DE ACELERACION
-  {
-    tocs_min = tocs;
-    tocs = maxTocs; // LIMITE INFERIOR DE TOCS.
-    flag_accelerar = 1;
-  }
-  OCR1A = tocs;
-  Serial.print("tocs: ");
-  Serial.println(tocs);
-}
-*/
-void validarTocs()
-{
-  
 }
 void calibrar(int opcion)
 {
@@ -1199,7 +1218,10 @@ void recuperarVariables()
   EEPROM.get(direccion_inicializado, primeraVez);
   if(primeraVez == 0) //variables recuperadas
   {
-    Serial.println("VARIABLES CARGADAS");
+    if(debugMode)
+    {
+      Serial.println("VARIABLES CARGADAS");
+    }
     for(int o = diametro_min-1; o <= diametro_max-1; o++)
     {
       EEPROM.get(32*o, array_ml_rev[o]);
@@ -1209,7 +1231,10 @@ void recuperarVariables()
   }
   else  // primera vez;
   {
-    Serial.println("SIN VARIABLES GUARDADAS");
+    if(debugMode)
+    {
+      Serial.println("SIN VARIABLES GUARDADAS");
+    }
     for (unsigned int i = 0 ; i < EEPROM.length() ; i++) 
     {
     EEPROM.write(i, 0);
@@ -1279,22 +1304,46 @@ inline void setuSteps()
 }
 inline void motorOn()
 {
+  switch (modo)
+  {
+  // BOMBEAR
+  case MODO_BOMBA:
+    if(debugMode)
+    {
+      Serial.println("Iniciando Bomba");
+    }    
+    calcularTocs();
+    break;
+  case MODO_DOSIFICADOR:
+    if(debugMode)
+    {
+      Serial.println("Iniciando Dosificador");
+    }
+    if(disparos_conteo == 1)
+    {
+      calcularTocs();
+    }
+    break;    
+  }
   ENABLE_LOW
-  Serial.println("MOTORON");
-  calcularTocs();
-  TCNT1  = 0; //contador
   timer1On();
-  cursor();
+  if(debugMode)
+  {
+
+  }
 }
 inline void motorOff()
 {
-  TIMER1_OFF
   ENABLE_HIGH
+  TIMER1_OFF
   cursor();
 }
 inline void timer1On()
 {
-  switch (prescaler) {
+  OCR1A = tocs;
+  TCNT1  = 0; //contador
+  switch (prescaler) 
+  {
     case 1:
       TCCR1B &= ~((1 << CS12) | (1 << CS11));
       TCCR1B |= (1 << CS10);
@@ -1332,7 +1381,10 @@ ISR(INT0_vect)  //INTERRUPCION POR push
 {
   delay(2);
   statusP = (PIND & (1<<PUSH_PIN)) >> 2;
-  //Serial.println(statusP,BIN);
+  if(debugMode)
+  {
+    Serial.println(statusP,BIN);
+  }
   if(statusP == 0)
   {
     flag_push = 1;
@@ -1395,6 +1447,10 @@ ISR(PCINT2_vect) //CLK
 }
 ISR(TIMER1_COMPA_vect)  //INTERRUPCION TIMER
 {
+  if(modo == MODO_DOSIFICADOR)
+  {
+    contador_pasos += 1;
+  }
   flag_timer = 1;
   STEP_HIGH
 }

@@ -1,4 +1,10 @@
 /*
+**PCB COMPATIBLE: VERSION 2019**
+VERSION 1.0.9
+NUEVA VARIABLE TIEMPO MAXIMO EN LLEGAR
+NUEVO MODO DEBUG PARA MENSAJES
+ICONO PARA INDICAR BOMBEO
+
 VERSION 1.0.8
 LCD ESTABLE
 RX ESTABLE
@@ -10,7 +16,7 @@ VERSION 1.0.7
 LCD MEJORADO/MEJORABLE
 RX MEJORABLE
 VERIFICAR CALCULOS 
-BUG
+--BUG:
 ENCODER
 VARIABLES
 
@@ -72,7 +78,9 @@ byte revolucion[8] = {B00000, B11111, B10001, B00001, B11101, B11001, B10111};
 #define PARAMETRO_PROPORCION        2
 #define PARAMETRO_SENTIDO           3
 // CONSTANTES DE MENU
+int disparos_min = 1;
 int disparos_max = 99;
+int tiempo_min = 1;
 int tiempo_max = 99;
 int pausa_max = 99;
 int pausa_min = 0;
@@ -82,11 +90,10 @@ int diametro_max = 5;
 int diametro_min = 1;
 bool sentido_max = 1;
 bool sentido_min = 0;
-int disparos_min = 1;
 // VARIABLES GLOBALES PARA MENU
 short etapa = 0;
 short modo = 0;
-short estado = 0;
+bool estado = 0;
 bool config = 0;
 short parametro;
 short parametro_max;
@@ -97,12 +104,14 @@ float flujo = 20.0;
 float volumen = 5.0;
 int tiempo = 5;  
 int pausa = 5;
-int disparos_conteo = 0;
+int disparos_conteo = 1;
 int disparos_total = 1;
 bool sentido = 1;
 float volumen_min = 1;
 float volumen_max = 999;
-
+float paso_flujo;
+float paso_volumen;
+float paso_proporcion;
 
 
 
@@ -121,18 +130,18 @@ int direccion_inicializado = 232;
 
 
 // CONSTANTES PARA STEPPER
-#define MOTOR_STEPS 200
-#define FLT       DDB5  //PD13
-#define ENABLE    DDB4  //PD12
-#define MODE0     DDB3  //PD11
-#define MODE1     DDB2  //PD10
-#define MODE2     DDB1  //PD9
-#define RST       DDB0  //PD8
-#define SLP       DDD7  //PD7
-#define STEP      DDD6  //PD6 
-#define DIR       DDD5  //PD5
-#define RELOJ       16000000
-#define G_PASO      1.8
+#define MOTOR_STEPS       200
+#define FLT               DDB5  //PD13
+#define ENABLE            DDB4  //PD12
+#define MODE0             DDB3  //PD11
+#define MODE1             DDB2  //PD10
+#define MODE2             DDB1  //PD9
+#define RST               DDB0  //PD8
+#define SLP               DDD7  //PD7
+#define STEP              DDD6  //PD6 
+#define DIR               DDD5  //PD5
+#define RELOJ             16000000
+#define G_PASO            1.8
 #define STEP_HIGH         PORTD |=  (1<<STEP);
 #define STEP_LOW          PORTD &= ~(1<<STEP);
 #define DIR_CW            PORTD |=  (1<<DIR);
@@ -148,7 +157,8 @@ int direccion_inicializado = 232;
 #define RPMMIN          1
 //VARIABLES PARA MOTOR
 unsigned long contador_pasos = 0;
-unsigned long contador_tocs = 0;
+unsigned long pasos_por_disparo = 0;
+unsigned long pasos_por_dosis = 0;
 int flag_accelerar = 0;
 int tocs_limite = 54;
 int maxTocs = 640;
@@ -159,23 +169,19 @@ int flag_timer = 0;
 
 
 
-
+// CONSTANTES DE VERIFICACION
+String array_prescaler = "1,8,64,256,1024";
+String array_microsteps = "1,2,4,8,16,32";
+float array_ml_rev[6]={0.7,0.8,0.9,1.0,1.2};
 //VARIABLES PARA CALCULOS
 float ml_rev;
-float array_ml_rev[6]={0.7,0.8,0.9,1.0,1.2};
 unsigned long tocs;
-unsigned long pasos_totales;
-String array_prescaler = "1,8,64,256,1024";
-int prescaler = 1024;
-String array_microsteps = "1,2,4,8,16,32";
+unsigned long u_pasos;
+int prescaler = 1;
 int microstep = 32;
 int diametro = 4;
-float paso_flujo;
-float paso_volumen;
 float flujo_max;
-float paso_proporcion;
 float flujo_min;
-int tiempo_min;
 float flujops_max;
 
 
@@ -204,7 +210,7 @@ short flag = 0;
 // VARIABLES PARA Serial
 String cadena ="";
 bool finRX = 0;
-
+bool debugMode = 1;
 
 
 
@@ -222,6 +228,7 @@ void restar();
 // PROTOTIPOS MENU
 void operando();
 void LCD();
+inline void iconoBombeando(bool activo);
 inline void actualizarConteo();
 inline void cursor();
 void menuModos();
